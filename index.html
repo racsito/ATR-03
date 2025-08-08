@@ -223,9 +223,22 @@
 
 <script>
     // =============================================
+    // CONFIGURACIÓN GITHUB (REMPLAZA CON TUS DATOS)
+    // =============================================
+    const GITHUB_CONFIG = {
+      TOKEN: localStorage.getItem('github_token') || prompt("Ingrese su token de GitHub:"),
+      OWNER: "racsito",
+      REPO: "atr-plc-data",
+      BRANCH: "main",
+      FILE: "data/atr-data.json"
+    };
+
+    // Guardar el token en localStorage para futuras sesiones
+    if (GITHUB_CONFIG.TOKEN) localStorage.setItem('github_token', GITHUB_CONFIG.TOKEN);
+
+    // =============================================
     // REPOSITORIOS PARA INDEXEDDB
     // =============================================
-
     class Database {
       constructor(name, version) {
         this.name = name;
@@ -250,22 +263,18 @@
           request.onupgradeneeded = (event) => {
             const db = event.target.result;
             
-            // Crear object store para los datos principales
             if (!db.objectStoreNames.contains('mainData')) {
               db.createObjectStore('mainData', { keyPath: 'id' });
             }
             
-            // Crear object store para equipos
             if (!db.objectStoreNames.contains('equipos')) {
               db.createObjectStore('equipos', { keyPath: 'id', autoIncrement: true });
             }
             
-            // Crear object store para campos adicionales
             if (!db.objectStoreNames.contains('camposAdicionales')) {
               db.createObjectStore('camposAdicionales', { keyPath: 'id', autoIncrement: true });
             }
             
-            // Crear object store para enlaces
             if (!db.objectStoreNames.contains('links')) {
               db.createObjectStore('links', { keyPath: 'name' });
             }
@@ -440,9 +449,127 @@
     }
 
     // =============================================
+    // FUNCIONES PARA GITHUB
+    // =============================================
+    async function ensureGitHubFileExists() {
+      try {
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.OWNER}/${GITHUB_CONFIG.REPO}/contents/${GITHUB_CONFIG.FILE}`;
+        const response = await fetch(url, {
+          headers: {
+            'Authorization': `token ${GITHUB_CONFIG.TOKEN}`,
+            'Accept': 'application/vnd.github.v3+json'
+          }
+        });
+        
+        if (response.status === 404) {
+          const initialContent = {
+            nombrePLC: "ATR-34 PLC",
+            numeroPLC: "00000000",
+            pakbus: "000",
+            ultimoMantenimiento: new Date().toLocaleDateString(),
+            equipos: [
+              "Rut xxxxxxxx",
+              "campbell cr 310 xxxxxxx",
+              "Conversor RS485 stm4855",
+              "batería 12V 18Ah",
+              "Controlador solar"
+            ],
+            camposAdicionales: [
+              { nombre: "cota", valor: "1234 m" },
+              { nombre: "nivel", valor: "2" }
+            ],
+            links: {
+              certificado: "#",
+              diagrama: "#",
+              manual: "#",
+              especificaciones: "#"
+            }
+          };
+          
+          await saveToGitHub(initialContent, true);
+          return initialContent;
+        }
+        
+        return null;
+      } catch (error) {
+        console.error("Error verificando archivo en GitHub:", error);
+        return null;
+      }
+    }
+
+    async function loadFromGitHub() {
+      try {
+        const url = `https://raw.githubusercontent.com/${GITHUB_CONFIG.OWNER}/${GITHUB_CONFIG.REPO}/${GITHUB_CONFIG.BRANCH}/${GITHUB_CONFIG.FILE}?t=${Date.now()}`;
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+          throw new Error(`Error ${response.status}`);
+        }
+        
+        return await response.json();
+      } catch (error) {
+        console.error("Error cargando datos desde GitHub:", error);
+        return null;
+      }
+    }
+
+    async function saveToGitHub(data, isInitialCreate = false) {
+      try {
+        let sha = null;
+        
+        if (!isInitialCreate) {
+          sha = await getFileSHA();
+        }
+
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.OWNER}/${GITHUB_CONFIG.REPO}/contents/${GITHUB_CONFIG.FILE}`;
+        const body = {
+          message: `Actualización ${new Date().toISOString()}`,
+          content: btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2)))),
+          branch: GITHUB_CONFIG.BRANCH
+        };
+        
+        if (sha) body.sha = sha;
+
+        const response = await fetch(url, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `token ${GITHUB_CONFIG.TOKEN}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/vnd.github.v3+json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        
+        return true;
+      } catch (error) {
+        console.error("Error guardando en GitHub:", error);
+        throw error;
+      }
+    }
+
+    async function getFileSHA() {
+      try {
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.OWNER}/${GITHUB_CONFIG.REPO}/contents/${GITHUB_CONFIG.FILE}`;
+        const response = await fetch(url, {
+          headers: {
+            'Authorization': `token ${GITHUB_CONFIG.TOKEN}`,
+            'Accept': 'application/vnd.github.v3+json'
+          }
+        });
+        const data = await response.json();
+        return data.sha;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // =============================================
     // APLICACIÓN PRINCIPAL
     // =============================================
-
     let modoEdicion = false;
     let dbInstance;
     let mainDataRepo;
@@ -468,63 +595,75 @@
         camposRepo = new CamposAdicionalesRepository(dbInstance);
         linksRepo = new LinksRepository(dbInstance);
         
-        // Cargar datos iniciales
-        await loadInitialData();
+        // 1. Intentar cargar desde GitHub
+        let githubData = await loadFromGitHub();
+        
+        if (!githubData) {
+          // 2. Si no existe, crear archivo en GitHub con datos iniciales
+          githubData = await ensureGitHubFileExists();
+        }
+        
+        if (githubData) {
+          // Actualizar UI con datos de GitHub
+          updateUI(githubData);
+          // Guardar localmente como respaldo
+          await saveToIndexedDB(githubData);
+        } else {
+          // 3. Si GitHub falla, cargar desde IndexedDB
+          await loadFromIndexedDB();
+        }
       } catch (error) {
         console.error("Error inicial:", error);
-        // Mostrar datos por defecto
         showDefaultData();
       }
     }
 
-    // Cargar datos iniciales desde IndexedDB
-    async function loadInitialData() {
+    async function loadFromIndexedDB() {
       try {
         // Cargar datos principales
         const mainData = await mainDataRepo.get(1);
-        if (mainData) {
-          document.getElementById('nombre-plc').innerText = mainData.nombrePLC || 'ATR-66 PLC';
-          document.getElementById('numero-plc').innerText = mainData.numeroPLC || '959312882';
-          document.getElementById('pakbus').innerText = mainData.pakbus || '784';
-          document.getElementById('ultimo-mantenimiento').innerText = mainData.ultimoMantenimiento || '15/06/2025';
-        }
+        if (!mainData) return;
 
         // Cargar equipos
         const equipos = await equiposRepo.getAll();
-        if (equipos && equipos.length > 0) {
-          renderizarEquipos(equipos.map(e => e.value));
-        } else {
-          renderizarEquipos([
-            "Rut xxxxxxxx",
-            "campbell cr 310 xxxxxxx",
-            "Conversor RS485 stm4855",
-            "batería 12V 18Ah",
-            "Controlador solar"
-          ]);
-        }
-
+        
         // Cargar campos adicionales
         const camposAdicionales = await camposRepo.getAll();
-        if (camposAdicionales && camposAdicionales.length > 0) {
-          renderizarCamposAdicionales(camposAdicionales);
-        } else {
-          renderizarCamposAdicionales([
-            { nombre: "cota", valor: "1234 m" },
-            { nombre: "nivel", valor: "2" }
-          ]);
-        }
-
+        
         // Cargar enlaces
         const storedLinks = await linksRepo.getAll();
-        if (storedLinks && storedLinks.length > 0) {
-          storedLinks.forEach(link => {
-            links[link.name] = link.url;
-            document.getElementById(`btn-${link.name}`).href = link.url;
-          });
-        }
+        const linksData = {};
+        storedLinks.forEach(link => {
+          linksData[link.name] = link.url;
+        });
+
+        updateUI({
+          ...mainData,
+          equipos: equipos.map(e => e.value),
+          camposAdicionales: camposAdicionales,
+          links: linksData
+        });
       } catch (error) {
-        console.error("Error al cargar datos iniciales:", error);
+        console.error("Error cargando de IndexedDB:", error);
         showDefaultData();
+      }
+    }
+
+    function updateUI(data) {
+      document.getElementById('nombre-plc').innerText = data.nombrePLC || 'ATR-66 PLC';
+      document.getElementById('numero-plc').innerText = data.numeroPLC || '959312882';
+      document.getElementById('pakbus').innerText = data.pakbus || '784';
+      document.getElementById('ultimo-mantenimiento').innerText = data.ultimoMantenimiento || '15/06/2025';
+      
+      renderizarEquipos(data.equipos || []);
+      renderizarCamposAdicionales(data.camposAdicionales || []);
+      
+      // Actualizar enlaces
+      if (data.links) {
+        for (const [key, url] of Object.entries(data.links)) {
+          links[key] = url;
+          document.getElementById(`btn-${key}`).href = url;
+        }
       }
     }
 
@@ -549,7 +688,6 @@
     // =============================================
     // FUNCIONES DE INTERFAZ DE USUARIO
     // =============================================
-
     function toggleModoEdicion() {
       modoEdicion = !modoEdicion;
 
@@ -575,7 +713,6 @@
           };
         }
       } else {
-        // Restaurar comportamiento de enlaces
         for (let key in links) {
           const btn = document.getElementById("btn-" + key);
           btn.onclick = null;
@@ -722,13 +859,11 @@
     // =============================================
     // FUNCIONES DE PERSISTENCIA
     // =============================================
-
     async function guardarCambios() {
       const clave = prompt("Ingrese la contraseña para guardar los cambios:");
       
-      // Verificación mejorada de la contraseña
       if (clave === null) {
-        return; // El usuario canceló
+        return;
       }
       
       if (clave.trim() !== "ceneris2020") {
@@ -737,40 +872,60 @@
       }
 
       try {
-        // Guardar datos principales
-        const mainData = {
-          id: 1,
+        // Preparar datos para guardar
+        const dataToSave = {
           nombrePLC: document.getElementById('nombre-plc').innerText,
           numeroPLC: document.getElementById('numero-plc').innerText,
           pakbus: document.getElementById('pakbus').innerText,
-          ultimoMantenimiento: document.getElementById('ultimo-mantenimiento').innerText
+          ultimoMantenimiento: document.getElementById('ultimo-mantenimiento').innerText,
+          equipos: obtenerEquipos(),
+          camposAdicionales: obtenerCamposAdicionales(),
+          links: links
         };
-        await mainDataRepo.save(mainData);
 
-        // Guardar equipos
-        const equipos = obtenerEquipos();
-        await equiposRepo.addAll(equipos);
-
-        // Guardar campos adicionales
-        const camposAdicionales = obtenerCamposAdicionales();
-        await camposRepo.addAll(camposAdicionales);
-
-        // Guardar enlaces
-        await linksRepo.saveAll(links);
+        // 1. Guardar en IndexedDB (local)
+        await saveToIndexedDB(dataToSave);
+        
+        // 2. Intentar guardar en GitHub (nube)
+        try {
+          await saveToGitHub(dataToSave);
+          console.log("Datos guardados en GitHub");
+        } catch (githubError) {
+          console.error("No se pudo guardar en GitHub, solo se guardó localmente", githubError);
+        }
 
         alert("✅ Cambios guardados correctamente.");
       } catch (error) {
-        console.error("Error al guardar cambios:", error);
-        alert("❌ Error al guardar los cambios. Consulte la consola para más detalles.");
+        console.error("Error al guardar:", error);
+        alert("❌ Error al guardar los cambios");
       }
+    }
+
+    async function saveToIndexedDB(data) {
+      // Guardar datos principales
+      const mainData = {
+        id: 1,
+        nombrePLC: data.nombrePLC,
+        numeroPLC: data.numeroPLC,
+        pakbus: data.pakbus,
+        ultimoMantenimiento: data.ultimoMantenimiento
+      };
+      await mainDataRepo.save(mainData);
+
+      // Guardar equipos
+      await equiposRepo.addAll(data.equipos);
+
+      // Guardar campos adicionales
+      await camposRepo.addAll(data.camposAdicionales);
+
+      // Guardar enlaces
+      await linksRepo.saveAll(data.links);
     }
 
     // =============================================
     // FUNCIONES DE EXPORTACIÓN
     // =============================================
-
     function exportarAExcel() {
-      // Obtener todos los datos
       const nombrePLC = document.getElementById("nombre-plc").innerText;
       const numeroPLC = document.getElementById("numero-plc").innerText;
       const ultimoMantenimiento = document.getElementById("ultimo-mantenimiento").innerText;
@@ -778,44 +933,37 @@
       const equipos = obtenerEquipos();
       const camposAdicionales = obtenerCamposAdicionales();
       
-      // Preparar los datos para Excel
       const datos = [
-        ["ATR", "Valor"], // Encabezados
+        ["ATR", "Valor"],
         ["Nombre PLC", nombrePLC],
         ["Número PLC", numeroPLC],
         ["Último mantenimiento", ultimoMantenimiento],
         ["PakBus", pakbus],
-        ["", ""], // Espacio en blanco
+        ["", ""],
         ["Equipos instalados", ""]
       ];
       
-      // Agregar equipos
       equipos.forEach(equipo => {
         datos.push(["", equipo]);
       });
       
-      datos.push(["", ""]); // Espacio en blanco
+      datos.push(["", ""]);
       datos.push(["Campos adicionales", ""]);
       
-      // Agregar campos adicionales
       camposAdicionales.forEach(campo => {
         datos.push([campo.nombre, campo.valor]);
       });
       
-      // Crear hoja de trabajo
       const ws = XLSX.utils.aoa_to_sheet(datos);
-      
-      // Crear libro de trabajo y agregar hoja
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Datos ATR");
       
-      // Generar archivo Excel
       const nombreArchivo = `${nombrePLC.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0,10)}.xlsx`;
       XLSX.writeFile(wb, nombreArchivo);
     }
 
     // Iniciar la aplicación cuando se cargue la página
     window.onload = initApp;
-  </script>
+</script>
 </body>
 </html>
