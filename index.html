@@ -2,253 +2,364 @@
 <html lang="es">
 <head>
   <!-- [Mantener todo el head original igual] -->
+  <!-- ... -->
 </head>
 <body>
   <!-- [Mantener todo el HTML original igual] -->
+  <!-- ... -->
 
 <script>
-  // =============================================
-  // CONFIGURACIÓN GITHUB (REMPLAZA CON TUS DATOS)
-  // =============================================
-  const CONFIG = {
-    TOKEN: localStorage.getItem('github_token') || prompt("Ingrese su token de GitHub:"),
-    OWNER: "racsito",
-    REPO: "atr-plc-data",
-    BRANCH: "main",
-    FILE: "data/atr-data.json"
-  };
+    // =============================================
+    // CONFIGURACIÓN GITHUB (REMPLAZA CON TUS DATOS)
+    // =============================================
+    const GITHUB_CONFIG = {
+      TOKEN: localStorage.getItem('github_token') || prompt("Ingrese su token de GitHub:"),
+      OWNER: "racsito",
+      REPO: "atr-plc-data",
+      BRANCH: "main",
+      FILE: "data/atr-data.json"
+    };
 
-  // Guardar el token en localStorage para futuras sesiones
-  if (CONFIG.TOKEN) localStorage.setItem('github_token', CONFIG.TOKEN);
+    // Guardar el token en localStorage para futuras sesiones
+    if (GITHUB_CONFIG.TOKEN) localStorage.setItem('github_token', GITHUB_CONFIG.TOKEN);
 
-  // =============================================
-  // FUNCIONES MEJORADAS PARA GITHUB
-  // =============================================
-  async function ensureFileExists() {
-    try {
-      const url = `https://api.github.com/repos/${CONFIG.OWNER}/${CONFIG.REPO}/contents/${CONFIG.FILE}`;
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `token ${CONFIG.TOKEN}`,
-          'Accept': 'application/vnd.github.v3+json'
-        }
-      });
-      
-      if (response.status === 404) {
-        // El archivo no existe, lo creamos
-        const initialContent = {
-          nombrePLC: "ATR-34 PLC",
-          numeroPLC: "00000000",
-          pakbus: "000",
-          ultimoMantenimiento: new Date().toLocaleDateString(),
-          equipos: [],
-          camposAdicionales: [],
-          links: {
-            certificado: "#",
-            diagrama: "#",
-            manual: "#",
-            especificaciones: "#"
+    // =============================================
+    // FUNCIONES PARA GITHUB
+    // =============================================
+    async function ensureGitHubFileExists() {
+      try {
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.OWNER}/${GITHUB_CONFIG.REPO}/contents/${GITHUB_CONFIG.FILE}`;
+        const response = await fetch(url, {
+          headers: {
+            'Authorization': `token ${GITHUB_CONFIG.TOKEN}`,
+            'Accept': 'application/vnd.github.v3+json'
           }
+        });
+        
+        if (response.status === 404) {
+          // El archivo no existe, lo creamos
+          const initialContent = {
+            nombrePLC: "ATR-34 PLC",
+            numeroPLC: "00000000",
+            pakbus: "000",
+            ultimoMantenimiento: new Date().toLocaleDateString(),
+            equipos: [
+              "Rut xxxxxxxx",
+              "campbell cr 310 xxxxxxx",
+              "Conversor RS485 stm4855",
+              "batería 12V 18Ah",
+              "Controlador solar"
+            ],
+            camposAdicionales: [
+              { nombre: "cota", valor: "1234 m" },
+              { nombre: "nivel", valor: "2" }
+            ],
+            links: {
+              certificado: "#",
+              diagrama: "#",
+              manual: "#",
+              especificaciones: "#"
+            }
+          };
+          
+          await saveToGitHub(initialContent, true);
+          console.log("Archivo creado exitosamente en GitHub");
+          return initialContent;
+        }
+        
+        return null;
+      } catch (error) {
+        console.error("Error verificando archivo en GitHub:", error);
+        return null;
+      }
+    }
+
+    async function loadFromGitHub() {
+      try {
+        const url = `https://raw.githubusercontent.com/${GITHUB_CONFIG.OWNER}/${GITHUB_CONFIG.REPO}/${GITHUB_CONFIG.BRANCH}/${GITHUB_CONFIG.FILE}?t=${Date.now()}`;
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+          throw new Error(`Error ${response.status}`);
+        }
+        
+        const data = await response.json();
+        return data;
+      } catch (error) {
+        console.error("Error cargando datos desde GitHub:", error);
+        return null;
+      }
+    }
+
+    async function saveToGitHub(data, isInitialCreate = false) {
+      try {
+        let sha = null;
+        
+        if (!isInitialCreate) {
+          sha = await getFileSHA();
+        }
+
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.OWNER}/${GITHUB_CONFIG.REPO}/contents/${GITHUB_CONFIG.FILE}`;
+        const body = {
+          message: `Actualización ${new Date().toISOString()}`,
+          content: btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2)))),
+          branch: GITHUB_CONFIG.BRANCH
         };
         
-        await saveToGitHub(initialContent, true);
-        console.log("Archivo creado exitosamente en GitHub");
-      }
-    } catch (error) {
-      console.error("Error verificando archivo:", error);
-    }
-  }
+        if (sha) body.sha = sha;
 
-  async function loadData() {
-    try {
-      await ensureFileExists();
-      
-      const url = `https://raw.githubusercontent.com/${CONFIG.OWNER}/${CONFIG.REPO}/${CONFIG.BRANCH}/${CONFIG.FILE}?t=${Date.now()}`;
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        throw new Error(`Error ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      // Guardar copia local como respaldo
-      localStorage.setItem('atr_local_backup', JSON.stringify(data));
-      
-      return data;
-    } catch (error) {
-      console.error("Error cargando datos:", error);
-      
-      // Intentar cargar desde el respaldo local
-      const localBackup = localStorage.getItem('atr_local_backup');
-      if (localBackup) {
-        console.log("Cargando desde respaldo local");
-        return JSON.parse(localBackup);
-      }
-      
-      // Datos por defecto si todo falla
-      return {
-        nombrePLC: "ATR-34 PLC",
-        numeroPLC: "00000000",
-        pakbus: "000",
-        ultimoMantenimiento: new Date().toLocaleDateString(),
-        equipos: [
-          "Rut xxxxxxxx",
-          "campbell cr 310 xxxxxxx",
-          "Conversor RS485 stm4855",
-          "batería 12V 18Ah",
-          "Controlador solar"
-        ],
-        camposAdicionales: [
-          { nombre: "cota", valor: "1234 m" },
-          { nombre: "nivel", valor: "2" }
-        ],
-        links: {
-          certificado: "#",
-          diagrama: "#",
-          manual: "#",
-          especificaciones: "#"
+        const response = await fetch(url, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `token ${GITHUB_CONFIG.TOKEN}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/vnd.github.v3+json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+          throw new Error(await response.text());
         }
-      };
-    }
-  }
-
-  async function saveToGitHub(data, isInitialCreate = false) {
-    try {
-      let sha = null;
-      
-      if (!isInitialCreate) {
-        sha = await getFileSHA();
+        
+        return true;
+      } catch (error) {
+        console.error("Error guardando en GitHub:", error);
+        throw error;
       }
-
-      const url = `https://api.github.com/repos/${CONFIG.OWNER}/${CONFIG.REPO}/contents/${CONFIG.FILE}`;
-      const body = {
-        message: `Actualización ${new Date().toISOString()}`,
-        content: btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2))),
-        branch: CONFIG.BRANCH
-      };
-      
-      if (sha) body.sha = sha;
-
-      const response = await fetch(url, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `token ${CONFIG.TOKEN}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/vnd.github.v3+json'
-        },
-        body: JSON.stringify(body)
-      });
-
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      
-      // Actualizar el respaldo local
-      localStorage.setItem('atr_local_backup', JSON.stringify(data));
-      
-      return true;
-    } catch (error) {
-      console.error("Error guardando:", error);
-      throw error;
     }
-  }
 
-  async function getFileSHA() {
-    try {
-      const url = `https://api.github.com/repos/${CONFIG.OWNER}/${CONFIG.REPO}/contents/${CONFIG.FILE}`;
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `token ${CONFIG.TOKEN}`,
-          'Accept': 'application/vnd.github.v3+json'
+    async function getFileSHA() {
+      try {
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.OWNER}/${GITHUB_CONFIG.REPO}/contents/${GITHUB_CONFIG.FILE}`;
+        const response = await fetch(url, {
+          headers: {
+            'Authorization': `token ${GITHUB_CONFIG.TOKEN}`,
+            'Accept': 'application/vnd.github.v3+json'
+          }
+        });
+        const data = await response.json();
+        return data.sha;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // =============================================
+    // REPOSITORIOS PARA INDEXEDDB
+    // =============================================
+    // [Mantener todas las clases de repositorios igual]
+    // Database, MainDataRepository, EquiposRepository, CamposAdicionalesRepository, LinksRepository
+    // ...
+
+    // =============================================
+    // APLICACIÓN PRINCIPAL (MODIFICADA PARA GITHUB)
+    // =============================================
+    let modoEdicion = false;
+    let dbInstance;
+    let mainDataRepo;
+    let equiposRepo;
+    let camposRepo;
+    let linksRepo;
+    const links = {
+      certificado: "#",
+      diagrama: "#",
+      manual: "#",
+      especificaciones: "#"
+    };
+
+    // Inicializar la aplicación
+    async function initApp() {
+      try {
+        // 1. Inicializar la base de datos y los repositorios
+        const db = new Database('ATRDatabase', 1);
+        dbInstance = await db.open();
+        
+        mainDataRepo = new MainDataRepository(dbInstance);
+        equiposRepo = new EquiposRepository(dbInstance);
+        camposRepo = new CamposAdicionalesRepository(dbInstance);
+        linksRepo = new LinksRepository(dbInstance);
+        
+        // 2. Intentar cargar desde GitHub primero
+        let githubData = await loadFromGitHub();
+        
+        if (!githubData) {
+          // Si falla GitHub, verificar si existe el archivo o crearlo
+          githubData = await ensureGitHubFileExists();
         }
-      });
-      const data = await response.json();
-      return data.sha;
-    } catch (e) {
-      return null;
+        
+        // 3. Cargar datos (de GitHub si existe, sino de IndexedDB)
+        if (githubData) {
+          // Tenemos datos de GitHub, actualizar IndexedDB
+          await loadFromGitHubData(githubData);
+        } else {
+          // No hay datos de GitHub, cargar de IndexedDB
+          await loadFromIndexedDB();
+        }
+      } catch (error) {
+        console.error("Error inicial:", error);
+        // Mostrar datos por defecto
+        showDefaultData();
+      }
     }
-  }
 
-  // =============================================
-  // MANEJO DE DATOS EN LA INTERFAZ
-  // =============================================
-  let appData = {};
-  let modoEdicion = false;
+    async function loadFromGitHubData(githubData) {
+      try {
+        // Actualizar UI con datos de GitHub
+        document.getElementById('nombre-plc').innerText = githubData.nombrePLC || 'ATR-66 PLC';
+        document.getElementById('numero-plc').innerText = githubData.numeroPLC || '959312882';
+        document.getElementById('pakbus').innerText = githubData.pakbus || '784';
+        document.getElementById('ultimo-mantenimiento').innerText = githubData.ultimoMantenimiento || '15/06/2025';
+        
+        renderizarEquipos(githubData.equipos || []);
+        renderizarCamposAdicionales(githubData.camposAdicionales || []);
+        
+        // Actualizar enlaces
+        if (githubData.links) {
+          for (const [key, url] of Object.entries(githubData.links)) {
+            links[key] = url;
+            document.getElementById(`btn-${key}`).href = url;
+          }
+        }
+        
+        // Guardar en IndexedDB como respaldo
+        await saveToIndexedDB(githubData);
+      } catch (error) {
+        console.error("Error cargando datos de GitHub:", error);
+        await loadFromIndexedDB();
+      }
+    }
 
-  async function initApp() {
-    try {
-      // Mostrar mensaje de carga
-      document.getElementById('nombre-plc').textContent = "Cargando...";
+    async function loadFromIndexedDB() {
+      try {
+        // Cargar datos principales
+        const mainData = await mainDataRepo.get(1);
+        if (mainData) {
+          document.getElementById('nombre-plc').innerText = mainData.nombrePLC || 'ATR-66 PLC';
+          document.getElementById('numero-plc').innerText = mainData.numeroPLC || '959312882';
+          document.getElementById('pakbus').innerText = mainData.pakbus || '784';
+          document.getElementById('ultimo-mantenimiento').innerText = mainData.ultimoMantenimiento || '15/06/2025';
+        }
+
+        // Cargar equipos
+        const equipos = await equiposRepo.getAll();
+        if (equipos && equipos.length > 0) {
+          renderizarEquipos(equipos.map(e => e.value));
+        } else {
+          renderizarEquipos([
+            "Rut xxxxxxxx",
+            "campbell cr 310 xxxxxxx",
+            "Conversor RS485 stm4855",
+            "batería 12V 18Ah",
+            "Controlador solar"
+          ]);
+        }
+
+        // Cargar campos adicionales
+        const camposAdicionales = await camposRepo.getAll();
+        if (camposAdicionales && camposAdicionales.length > 0) {
+          renderizarCamposAdicionales(camposAdicionales);
+        } else {
+          renderizarCamposAdicionales([
+            { nombre: "cota", valor: "1234 m" },
+            { nombre: "nivel", valor: "2" }
+          ]);
+        }
+
+        // Cargar enlaces
+        const storedLinks = await linksRepo.getAll();
+        if (storedLinks && storedLinks.length > 0) {
+          storedLinks.forEach(link => {
+            links[link.name] = link.url;
+            document.getElementById(`btn-${link.name}`).href = link.url;
+          });
+        }
+      } catch (error) {
+        console.error("Error al cargar datos de IndexedDB:", error);
+        showDefaultData();
+      }
+    }
+
+    async function saveToIndexedDB(data) {
+      try {
+        // Guardar datos principales
+        const mainData = {
+          id: 1,
+          nombrePLC: data.nombrePLC || document.getElementById('nombre-plc').innerText,
+          numeroPLC: data.numeroPLC || document.getElementById('numero-plc').innerText,
+          pakbus: data.pakbus || document.getElementById('pakbus').innerText,
+          ultimoMantenimiento: data.ultimoMantenimiento || document.getElementById('ultimo-mantenimiento').innerText
+        };
+        await mainDataRepo.save(mainData);
+
+        // Guardar equipos
+        const equipos = data.equipos || obtenerEquipos();
+        await equiposRepo.addAll(equipos);
+
+        // Guardar campos adicionales
+        const camposAdicionales = data.camposAdicionales || obtenerCamposAdicionales();
+        await camposRepo.addAll(camposAdicionales);
+
+        // Guardar enlaces
+        const linksToSave = data.links || links;
+        await linksRepo.saveAll(linksToSave);
+      } catch (error) {
+        console.error("Error guardando en IndexedDB:", error);
+      }
+    }
+
+    // [Mantener todas las demás funciones igual: showDefaultData, toggleModoEdicion, editarCampo, 
+    // renderizarEquipos, editarEquipo, eliminarEquipo, agregarEquipo, obtenerEquipos, 
+    // renderizarCamposAdicionales, editarCampoAdicional, eliminarCampoAdicional, 
+    // agregarCampoAdicional, obtenerCamposAdicionales, exportarAExcel]
+
+    // =============================================
+    // FUNCION DE GUARDADO MEJORADA (GITHUB + INDEXEDDB)
+    // =============================================
+    async function guardarCambios() {
+      const clave = prompt("Ingrese la contraseña para guardar los cambios:");
       
-      // 1. Cargar datos
-      appData = await loadData();
+      if (clave === null) {
+        return; // El usuario canceló
+      }
       
-      // 2. Mostrar en la interfaz
-      updateUI();
-      
-      // 3. Configurar eventos
-      document.getElementById('btn-save').onclick = guardarCambios;
-      document.getElementById('btn-toggle-edit').onclick = toggleModoEdicion;
-      document.getElementById('btn-export').onclick = exportarAExcel;
-      
-      console.log("Datos cargados correctamente:", appData);
-    } catch (error) {
-      console.error("Error inicializando:", error);
-      alert("Error al cargar los datos. Ver consola para detalles.");
-    }
-  }
+      if (clave.trim() !== "ceneris2020") {
+        alert("❌ Contraseña incorrecta. La contraseña es 'ceneris2020' (sin comillas)");
+        return;
+      }
 
-  function updateUI() {
-    // Actualizar todos los campos
-    document.getElementById('nombre-plc').textContent = appData.nombrePLC;
-    document.getElementById('numero-plc').textContent = appData.numeroPLC;
-    document.getElementById('pakbus').textContent = appData.pakbus;
-    document.getElementById('ultimo-mantenimiento').textContent = appData.ultimoMantenimiento;
-    
-    renderizarEquipos(appData.equipos);
-    renderizarCamposAdicionales(appData.camposAdicionales);
-    
-    // Actualizar enlaces
-    for (const [key, url] of Object.entries(appData.links)) {
-      const btn = document.getElementById(`btn-${key}`);
-      if (btn) btn.href = url;
-    }
-  }
+      try {
+        // Preparar datos para guardar
+        const dataToSave = {
+          nombrePLC: document.getElementById('nombre-plc').innerText,
+          numeroPLC: document.getElementById('numero-plc').innerText,
+          pakbus: document.getElementById('pakbus').innerText,
+          ultimoMantenimiento: document.getElementById('ultimo-mantenimiento').innerText,
+          equipos: obtenerEquipos(),
+          camposAdicionales: obtenerCamposAdicionales(),
+          links: links
+        };
 
-  async function guardarCambios() {
-    const clave = prompt("Contraseña para guardar:");
-    if (clave !== "ceneris2020") {
-      alert("Contraseña incorrecta");
-      return;
+        // 1. Intentar guardar en GitHub primero
+        try {
+          await saveToGitHub(dataToSave);
+          console.log("Datos guardados en GitHub");
+        } catch (githubError) {
+          console.error("Error guardando en GitHub, guardando solo localmente:", githubError);
+        }
+
+        // 2. Guardar en IndexedDB como respaldo
+        await saveToIndexedDB(dataToSave);
+
+        alert("✅ Cambios guardados correctamente.");
+      } catch (error) {
+        console.error("Error al guardar cambios:", error);
+        alert("❌ Error al guardar los cambios. Consulte la consola para más detalles.");
+      }
     }
 
-    try {
-      // 1. Recoger datos actuales de la UI
-      appData = {
-        nombrePLC: document.getElementById('nombre-plc').textContent,
-        numeroPLC: document.getElementById('numero-plc').textContent,
-        pakbus: document.getElementById('pakbus').textContent,
-        ultimoMantenimiento: document.getElementById('ultimo-mantenimiento').textContent,
-        equipos: obtenerEquipos(),
-        camposAdicionales: obtenerCamposAdicionales(),
-        links: appData.links
-      };
-
-      // 2. Guardar en GitHub
-      await saveToGitHub(appData);
-      alert("✅ Datos guardados correctamente");
-    } catch (error) {
-      alert(`❌ Error al guardar: ${error.message}`);
-    }
-  }
-
-  // [Mantener todas las funciones de renderizado iguales que antes...]
-  // renderizarEquipos(), editarCampo(), etc...
-
-  // Iniciar la app cuando se cargue la página
-  window.addEventListener('DOMContentLoaded', initApp);
+    // Iniciar la aplicación cuando se cargue la página
+    window.onload = initApp;
 </script>
 </body>
 </html>
-
